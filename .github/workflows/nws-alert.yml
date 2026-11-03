@@ -1,4 +1,4 @@
-name: NWS Graphicast Latest
+name: NWS Graphicast Images
 
 on:
   workflow_dispatch:
@@ -20,140 +20,146 @@ jobs:
           node-version: "20"
 
       - name: Install Dependencies
-        run: |
-          npm install axios sharp tesseract.js
+        run: npm install axios
 
-      - name: Fetch Latest Graphicast
+      - name: Fetch Graphicast Images
         run: |
-
           mkdir -p public/weather
 
           node <<'EOF'
 
-          const fs = require("fs");
-          const axios = require("axios");
-          const sharp = require("sharp");
-          const Tesseract = require("tesseract.js");
+          const fs = require('fs');
+          const axios = require('axios');
 
           const urls = [
-            "https://www.weather.gov/images/sju/graphicast/1.png",
-            "https://www.weather.gov/images/sju/graphicast/2.png",
-            "https://www.weather.gov/images/sju/graphicast/3.png"
+            'https://www.weather.gov/images/sju/graphicast/1.png',
+            'https://www.weather.gov/images/sju/graphicast/2.png',
+            'https://www.weather.gov/images/sju/graphicast/3.png',
+            'https://www.weather.gov/images/sju/graphicast/4.png',
+            'https://www.weather.gov/images/sju/graphicast/5.png',
+            'https://www.weather.gov/images/sju/graphicast/6.png',
+            'https://www.weather.gov/images/sju/graphicast/7.png'
           ];
 
-          async function download(url) {
+          async function getImageInfo(url) {
 
-            const response = await axios.get(
-              url,
-              {
-                responseType: "arraybuffer"
+            try {
+
+              const head = await axios.head(url);
+
+              const modified =
+                head.headers['last-modified'];
+
+              if (!modified) {
+                return null;
               }
-            );
 
-            return Buffer.from(response.data);
-          }
+              const image =
+                await axios.get(url,{
+                  responseType:'arraybuffer'
+                });
 
-          async function readTimestamp(buffer,index) {
+              return {
+                url,
+                modified:
+                  new Date(modified),
+                buffer:
+                  Buffer.from(image.data)
+              };
 
-            const crop =
-              await sharp(buffer)
-              .extract({
-                left: 700,
-                top: 500,
-                width: 300,
-                height: 250
-              })
-              .png()
-              .toBuffer();
+            } catch(error) {
 
-            const ocr =
-              await Tesseract.recognize(
-                crop,
-                "eng"
+              console.log(
+                'Skipping',
+                url
               );
 
-            return {
-              index,
-              text:
-                ocr.data.text || "",
-              buffer
-            };
+              return null;
+            }
           }
 
           (async()=>{
 
-            const results=[];
-
-            for(
-              let i=0;
-              i<urls.length;
-              i++
-            ){
-
-              console.log(
-                "Checking",
-                urls[i]
-              );
-
-              const image=
-                await download(
-                  urls[i]
-                );
-
-              const info=
-                await readTimestamp(
-                  image,
-                  i
-                );
-
-              results.push(info);
-
-              console.log(
-                info.text
-              );
-            }
-
             const today =
               new Date()
-              .toLocaleDateString(
-                "en-US",
-                {
-                  timeZone:
-                   "America/Puerto_Rico"
-                }
-              );
+                .toLocaleDateString(
+                  'en-US',
+                  {
+                    timeZone:
+                      'America/Puerto_Rico'
+                  }
+                );
 
-            let winner =
-              results[0];
+            const results = [];
 
-            for(
-              const r of results
-            ){
+            for (const url of urls) {
 
-              if(
-                r.text.length >
-                winner.text.length
-              ){
-                winner=r;
+              const info =
+                await getImageInfo(url);
+
+              if (!info)
+                continue;
+
+              const fileDate =
+                info.modified
+                    .toLocaleDateString(
+                      'en-US',
+                      {
+                        timeZone:
+                         'America/Puerto_Rico'
+                      }
+                    );
+
+              if (fileDate === today) {
+
+                results.push(info);
+
               }
             }
 
-            fs.writeFileSync(
-              "public/weather/nws-latest.png",
-              winner.buffer
+            results.sort(
+              (a,b)=>
+                b.modified - a.modified
             );
 
+            const manifest = [];
+
+            let counter = 1;
+
+            for (const image of results) {
+
+              const filename =
+                `nws-latest-${counter}.png`;
+
+              fs.writeFileSync(
+                `public/weather/${filename}`,
+                image.buffer
+              );
+
+              manifest.push({
+                file:
+                  filename,
+                source:
+                  image.url,
+                modified:
+                  image.modified
+                    .toISOString()
+              });
+
+              counter++;
+            }
+
             fs.writeFileSync(
-              "public/weather/nws-latest.json",
+              'public/weather/nws-latest.json',
               JSON.stringify(
                 {
                   updated:
                     new Date()
-                    .toISOString(),
-                  source:
-                    urls[winner.index],
-                  ocr:
-                    winner.text
+                      .toISOString(),
+                  count:
+                    manifest.length,
+                  images:
+                    manifest
                 },
                 null,
                 2
@@ -161,13 +167,12 @@ jobs:
             );
 
             console.log(
-              "Saved:",
-              urls[winner.index]
+              `Saved ${manifest.length} images`
             );
 
           })()
-          .catch(err=>{
-            console.error(err);
+          .catch(error=>{
+            console.error(error);
             process.exit(1);
           });
 
@@ -179,15 +184,15 @@ jobs:
 
       - name: Commit Changes
         run: |
-
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          git config user.name github-actions
+          git config user.email actions@github.com
 
           git add public/weather
 
           if git diff --cached --quiet; then
+            echo "No changes"
             exit 0
           fi
 
-          git commit -m "Update latest NWS graphicast"
+          git commit -m "Update NWS Graphicast images"
           git push
