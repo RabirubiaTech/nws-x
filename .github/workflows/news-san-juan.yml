@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -31,7 +31,10 @@ jobs:
           mkdir -p public/weather
           mkdir -p scripts
 
-      - name: Create Scraper
+          # Create placeholder file if folder is empty
+          touch public/weather/.gitkeep
+
+      - name: Create Scraper Script
         run: |
           cat > scripts/fetch-nws.js << 'EOF'
 
@@ -53,19 +56,21 @@ jobs:
             'tropical'
           ];
 
-          async function downloadImage(url, output) {
+          async function downloadImage(url, destination) {
+
             return new Promise((resolve, reject) => {
 
-              const file = fs.createWriteStream(output);
+              const file = fs.createWriteStream(destination);
 
               https.get(url, response => {
 
                 if (response.statusCode !== 200) {
-                  return reject(
+                  reject(
                     new Error(
-                      `Image download failed (${response.statusCode})`
+                      `Download failed: ${response.statusCode}`
                     )
                   );
+                  return;
                 }
 
                 response.pipe(file);
@@ -75,8 +80,22 @@ jobs:
                 });
 
               }).on('error', reject);
-
             });
+          }
+
+          async function createStatus(message) {
+
+            fs.writeFileSync(
+              'public/weather/nws-status.json',
+              JSON.stringify(
+                {
+                  updated: new Date().toISOString(),
+                  status: message
+                },
+                null,
+                2
+              )
+            );
           }
 
           async function main() {
@@ -87,147 +106,191 @@ jobs:
 
             const page = await browser.newPage({
               viewport: {
-                width: 1280,
-                height: 2000
+                width: 1400,
+                height: 2500
               }
             });
 
-            console.log("Loading page...");
+            try {
 
-            await page.goto(
-              'https://x.com/NWSSanJuan',
-              {
-                waitUntil: 'domcontentloaded',
-                timeout: 30000
-              }
-            );
+              console.log("Opening X...");
 
-            await page.waitForTimeout(5000);
+              await page.goto(
+                'https://x.com/NWSSanJuan',
+                {
+                  waitUntil: 'domcontentloaded',
+                  timeout: 30000
+                }
+              );
 
-            const result = await page.evaluate((keywords) => {
+              await page.waitForTimeout(5000);
 
-              const ONE_DAY =
-                24 * 60 * 60 * 1000;
+              await page.screenshot({
+                path: 'public/weather/debug.png',
+                fullPage: true
+              });
 
-              const tweets =
-                Array.from(
-                  document.querySelectorAll('article')
-                );
+              console.log("Page title:");
+              console.log(await page.title());
 
-              for (const tweet of tweets) {
+              const result = await page.evaluate((keywords) => {
 
-                const time =
-                  tweet.querySelector('time');
+                const DAY_MS =
+                  24 * 60 * 60 * 1000;
 
-                if (!time) continue;
-
-                const published =
-                  new Date(
-                    time.getAttribute('datetime')
+                const tweets =
+                  Array.from(
+                    document.querySelectorAll('article')
                   );
 
-                if (
-                  Date.now() -
-                  published.getTime() >
-                  ONE_DAY
-                ) {
-                  continue;
+                for (const tweet of tweets) {
+
+                  const timeNode =
+                    tweet.querySelector('time');
+
+                  if (!timeNode) continue;
+
+                  const published =
+                    new Date(
+                      timeNode.getAttribute('datetime')
+                    );
+
+                  if (
+                    Date.now() -
+                    published.getTime() >
+                    DAY_MS
+                  ) {
+                    continue;
+                  }
+
+                  const text =
+                    tweet.innerText.toLowerCase();
+
+                  const matched =
+                    keywords.some(keyword =>
+                      text.includes(keyword)
+                    );
+
+                  if (!matched) continue;
+
+                  const image =
+                    tweet.querySelector(
+                      'img[src*="pbs.twimg.com/media"]'
+                    );
+
+                  if (!image) continue;
+
+                  return {
+                    imageUrl: image.src,
+                    text: tweet.innerText,
+                    timestamp:
+                      published.toISOString()
+                  };
                 }
 
-                const text =
-                  tweet.innerText.toLowerCase();
+                return null;
 
-                const match =
-                  keywords.some(keyword =>
-                    text.includes(keyword)
-                  );
+              }, KEYWORDS);
 
-                if (!match) continue;
+              await browser.close();
 
-                const image =
-                  tweet.querySelector(
-                    'img[src*="pbs.twimg.com/media"]'
-                  );
+              if (!result) {
 
-                if (!image) continue;
+                console.log(
+                  "No qualifying image found."
+                );
 
-                return {
-                  imageUrl: image.src,
-                  text: tweet.innerText,
-                  datetime:
-                    published.toISOString()
-                };
+                await createStatus(
+                  "No weather alert image found in last 24 hours."
+                );
+
+                process.exit(0);
               }
 
-              return null;
-
-            }, KEYWORDS);
-
-            await browser.close();
-
-            if (!result) {
-
               console.log(
-                'No matching alert image found in last 24 hours.'
+                `Downloading image: ${result.imageUrl}`
+              );
+
+              await downloadImage(
+                result.imageUrl,
+                'public/weather/nws-latest.jpg'
+              );
+
+              fs.writeFileSync(
+                'public/weather/nws-latest.json',
+                JSON.stringify(
+                  {
+                    updated:
+                      new Date().toISOString(),
+                    source:
+                      'https://x.com/NWSSanJuan',
+                    postDate:
+                      result.timestamp,
+                    text:
+                      result.text,
+                    image:
+                      '/weather/nws-latest.jpg'
+                  },
+                  null,
+                  2
+                )
+              );
+
+              await createStatus(
+                "Latest alert image updated successfully."
+              );
+
+            } catch (error) {
+
+              console.error(error);
+
+              await createStatus(
+                `Error: ${error.message}`
               );
 
               process.exit(0);
             }
-
-            console.log(
-              `Downloading image: ${result.imageUrl}`
-            );
-
-            await downloadImage(
-              result.imageUrl,
-              'public/weather/nws-latest.jpg'
-            );
-
-            fs.writeFileSync(
-              'public/weather/nws-latest.json',
-              JSON.stringify(
-                {
-                  updated:
-                    new Date().toISOString(),
-                  source:
-                    'https://x.com/NWSSanJuan',
-                  alertDate:
-                    result.datetime,
-                  text:
-                    result.text,
-                  image:
-                    '/weather/nws-latest.jpg'
-                },
-                null,
-                2
-              )
-            );
-
-            console.log(
-              'Weather image updated successfully.'
-            );
           }
 
-          main()
-            .then(() => process.exit(0))
-            .catch(error => {
-              console.error(error);
-              process.exit(1);
-            });
+          main();
 
           EOF
 
-      - name: Run Scraper
+      - name: Execute Scraper
         run: node scripts/fetch-nws.js
+
+      - name: Upload Debug Screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: nws-debug
+          path: public/weather/debug.png
+          if-no-files-found: ignore
 
       - name: Commit Changes
         run: |
+
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
-          git add public/weather/*
+          if [ ! -d "public/weather" ]; then
+            echo "Directory missing"
+            exit 0
+          fi
 
-          git diff --cached --quiet && exit 0
+          FILE_COUNT=$(find public/weather -type f | wc -l)
 
-          git commit -m "Update NWS San Juan image"
+          if [ "$FILE_COUNT" -eq 0 ]; then
+            echo "No files generated"
+            exit 0
+          fi
+
+          git add public/weather
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "Update NWS San Juan alert image"
+
           git push
