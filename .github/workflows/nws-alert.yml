@@ -19,90 +19,168 @@ jobs:
         with:
           node-version: "20"
 
-      - run: npm install axios sharp
+      - name: Install Dependencies
+        run: npm install axios sharp
 
-      - name: Generate Alert
+      - name: Generate Alert Graphic
         run: |
           mkdir -p public/weather
 
           node <<'EOF'
+          const fs = require('fs');
+          const axios = require('axios');
+          const sharp = require('sharp');
 
-          const fs=require('fs');
-          const axios=require('axios');
-          const sharp=require('sharp');
+          function esc(s='') {
+            return s
+              .replace(/&/g,'&amp;')
+              .replace(/</g,'&lt;')
+              .replace(/>/g,'&gt;');
+          }
 
-          (async()=>{
+          (async () => {
 
-            const r=await axios.get(
+            console.log('Fetching NOAA alerts...');
+
+            const response = await axios.get(
               'https://api.weather.gov/alerts/active?area=PR',
               {
-                headers:{
-                  'User-Agent':'rabirubiawx.com'
+                headers: {
+                  'User-Agent': 'rabirubiawx.com'
                 }
               }
             );
 
-            const alert=
-              r.data.features?.[0]?.properties ||
-              {
-                event:'No Active Alerts',
-                headline:'No active alerts.'
+            const alert =
+              response.data.features?.[0]?.properties || {
+                event: 'No Active Alerts',
+                headline: 'No active alerts for Puerto Rico.',
+                severity: 'Information'
               };
 
-            const svg=`
+            let color = '#00B4D8';
+
+            if (alert.severity === 'Extreme')
+              color = '#D90429';
+
+            if (alert.severity === 'Severe')
+              color = '#F77F00';
+
+            const title =
+              esc(alert.event || 'NWS Alert');
+
+            const headline =
+              esc(
+                (alert.headline || '')
+                .substring(0,120)
+              );
+
+            const svg = `
             <svg xmlns="http://www.w3.org/2000/svg"
                  width="1080"
                  height="1350">
 
-            <rect width="1080"
-                  height="1350"
-                  fill="#003566"/>
+              <rect
+                width="1080"
+                height="1350"
+                fill="#003566"/>
 
-            <path d="M0 1000
-                     Q180 920 360 1000
-                     T720 980
-                     T1080 1050
-                     L1080 1350
-                     L0 1350 Z"
-                  fill="#00b4d8"/>
+              <text
+                x="540"
+                y="700"
+                text-anchor="middle"
+                fill="#ffffff"
+                opacity="0.05"
+                font-size="500"
+                font-family="Arial">
+                PR
+              </text>
 
-            <text x="50"
-                  y="100"
-                  fill="white"
-                  font-size="40">
-                  Rabirubia Weather
-            </text>
+              <path
+                d="M0 950
+                   Q200 870 400 970
+                   T800 950
+                   T1080 1020
+                   L1080 1350
+                   L0 1350 Z"
+                fill="#0077B6"/>
 
-            <text x="50"
-                  y="220"
-                  fill="white"
-                  font-size="64"
-                  font-weight="bold">
-                  ${alert.event}
-            </text>
+              <path
+                d="M0 1080
+                   Q220 1010 440 1100
+                   T880 1080
+                   T1080 1150
+                   L1080 1350
+                   L0 1350 Z"
+                fill="#48CAE4"/>
 
-            <text x="50"
-                  y="330"
-                  fill="white"
-                  font-size="32">
-                  ${(alert.headline || '').substring(0,80)}
-            </text>
+              <text
+                x="50"
+                y="90"
+                fill="#90E0EF"
+                font-size="42"
+                font-weight="bold"
+                font-family="Arial">
+                Rabirubia Weather
+              </text>
 
-            <rect x="0"
-                  y="1260"
-                  width="1080"
-                  height="90"
-                  fill="#001233"/>
+              <rect
+                x="40"
+                y="120"
+                width="1000"
+                height="120"
+                rx="20"
+                fill="${color}" />
 
-            <text x="540"
-                  y="1315"
-                  text-anchor="middle"
-                  fill="white"
-                  font-size="36">
-                  rabirubiawx.com
-            </text>
+              <text
+                x="70"
+                y="195"
+                fill="white"
+                font-size="58"
+                font-weight="bold"
+                font-family="Arial">
+                ${title}
+              </text>
+
+              <text
+                x="60"
+                y="340"
+                fill="white"
+                font-size="36"
+                font-family="Arial">
+                ${headline}
+              </text>
+
+              <text
+                x="60"
+                y="1000"
+                fill="white"
+                font-size="34"
+                font-family="Arial">
+                Severity: ${esc(alert.severity || 'Information')}
+              </text>
+
+              <rect
+                x="0"
+                y="1240"
+                width="1080"
+                height="110"
+                fill="#001220"/>
+
+              <text
+                x="540"
+                y="1305"
+                text-anchor="middle"
+                fill="white"
+                font-size="42"
+                font-weight="bold"
+                font-family="Arial">
+                rabirubiawx.com
+              </text>
 
             </svg>`;
+
+            console.log('Rendering PNG...');
 
             await sharp(Buffer.from(svg))
               .png()
@@ -113,18 +191,36 @@ jobs:
               JSON.stringify(alert,null,2)
             );
 
-          })();
+            console.log('PNG created');
+            console.log(
+              fs.existsSync(
+                'public/weather/nws-latest.png'
+              )
+            );
+
+          })().catch(err => {
+            console.error(err);
+            process.exit(1);
+          });
 
           EOF
 
-      - name: Commit
+      - name: Verify Files
         run: |
-          git config user.name github-actions
-          git config user.email actions@github.com
+          echo "Generated files:"
+          find public -type f
+
+          ls -lah public/weather
+
+      - name: Commit Changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
 
           git add public/weather
 
           if git diff --cached --quiet; then
+            echo "No changes"
             exit 0
           fi
 
