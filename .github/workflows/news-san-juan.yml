@@ -1,0 +1,172 @@
+name: Update NWS San Juan Alert
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-alert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm install playwright
+          npx playwright install chromium
+
+      - name: Create Folders
+        run: |
+          mkdir -p public/weather
+          mkdir -p scripts
+
+      - name: Create Scraper
+        run: |
+          cat > scripts/fetch-nws.js << 'EOF'
+          const fs = require("fs");
+          const https = require("https");
+          const { chromium } = require("playwright");
+
+          const KEYWORDS = [
+            "warning",
+            "watch",
+            "advisory",
+            "flood",
+            "flooding",
+            "storm",
+            "hurricane",
+            "tropical",
+            "marine",
+            "thunderstorm"
+          ];
+
+          async function download(url, path) {
+            return new Promise((resolve, reject) => {
+              https.get(url, (res) => {
+                const file = fs.createWriteStream(path);
+                res.pipe(file);
+
+                file.on("finish", () => {
+                  file.close(resolve);
+                });
+              }).on("error", reject);
+            });
+          }
+
+          async function main() {
+
+            const browser = await chromium.launch({
+              headless: true
+            });
+
+            const page = await browser.newPage();
+
+            await page.goto(
+              "https://x.com/NWSSanJuan",
+              {
+                waitUntil: "networkidle",
+                timeout: 120000
+              }
+            );
+
+            await page.waitForTimeout(8000);
+
+            const result = await page.evaluate((keywords) => {
+
+              const tweets =
+                Array.from(document.querySelectorAll("article"));
+
+              for (const tweet of tweets) {
+
+                const text =
+                  tweet.innerText.toLowerCase();
+
+                const matched =
+                  keywords.some(k =>
+                    text.includes(k)
+                  );
+
+                if (!matched) continue;
+
+                const img =
+                  tweet.querySelector(
+                    'img[src*="pbs.twimg.com"]'
+                  );
+
+                if (img) {
+                  return {
+                    image: img.src,
+                    text: tweet.innerText
+                  };
+                }
+              }
+
+              return null;
+
+            }, KEYWORDS);
+
+            await browser.close();
+
+            if (!result) {
+              throw new Error(
+                "No matching alert image found."
+              );
+            }
+
+            await download(
+              result.image,
+              "public/weather/nws-latest.jpg"
+            );
+
+            fs.writeFileSync(
+              "public/weather/nws-latest.json",
+              JSON.stringify(
+                {
+                  updated:
+                    new Date().toISOString(),
+                  text: result.text,
+                  image:
+                    "/weather/nws-latest.jpg"
+                },
+                null,
+                2
+              )
+            );
+
+            console.log(
+              "Latest NWS image updated."
+            );
+          }
+
+          main().catch(err => {
+            console.error(err);
+            process.exit(1);
+          });
+          EOF
+
+      - name: Run Scraper
+        run: node scripts/fetch-nws.js
+
+      - name: Commit Changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git add public/weather/*
+
+          git diff --cached --quiet && exit 0
+
+          git commit -m "Update NWS San Juan alert image"
+          git push
