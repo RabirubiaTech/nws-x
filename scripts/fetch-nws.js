@@ -1,106 +1,279 @@
-const fs = require("fs");
-const path = require("path");
-
-const BEARER = process.env.TWITTER_BEARER_TOKEN;
+const fs = require('fs');
+const https = require('https');
+const { chromium } = require('playwright');
 
 const KEYWORDS = [
-  "advisory",
-  "warning",
-  "watch",
-  "flood",
-  "flooding",
-  "storm",
-  "tropical",
-  "hurricane",
-  "marine",
-  "weather statement"
+  'heat advisory',
+  'heat',
+  'excessive heat',
+  'warning',
+  'watch',
+  'advisory',
+  'flood',
+  'flooding',
+  'flash flood',
+  'storm',
+  'severe',
+  'marine',
+  'hazard',
+  'thunderstorm',
+  'tropical',
+  'hurricane'
 ];
 
-async function twitter(url) {
-  const r = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${BEARER}`
-    }
+async function downloadImage(url, destination) {
+
+  return new Promise((resolve, reject) => {
+
+    const file = fs.createWriteStream(destination);
+
+    https.get(url, response => {
+
+      if (response.statusCode !== 200) {
+
+        reject(
+          new Error(
+            `Download failed (${response.statusCode})`
+          )
+        );
+
+        return;
+      }
+
+      response.pipe(file);
+
+      file.on('finish', () => {
+        file.close(resolve);
+      });
+
+    }).on('error', reject);
+
   });
-
-  if (!r.ok) {
-    throw new Error(await r.text());
-  }
-
-  return r.json();
 }
 
-async function main() {
-  // NWS San Juan user id currently should be looked up once and stored
-  const USER_ID = "18169117";
-
-  const tweets = await twitter(
-    `https://api.twitter.com/2/users/${USER_ID}/tweets?max_results=20&tweet.fields=created_at,attachments,text&expansions=attachments.media_keys&media.fields=url,preview_image_url,type`
-  );
-
-  const mediaMap = {};
-
-  if (tweets.includes?.media) {
-    tweets.includes.media.forEach(m => {
-      mediaMap[m.media_key] = m;
-    });
-  }
-
-  const match = tweets.data.find(tweet => {
-    const text = tweet.text.toLowerCase();
-
-    return KEYWORDS.some(keyword =>
-      text.includes(keyword)
-    );
-  });
-
-  if (!match) {
-    console.log("No matching advisory found");
-    return;
-  }
-
-  let imageUrl = null;
-
-  for (const key of match.attachments?.media_keys || []) {
-    const media = mediaMap[key];
-
-    if (media?.type === "photo" && media.url) {
-      imageUrl = media.url;
-      break;
-    }
-  }
-
-  if (!imageUrl) {
-    console.log("No image found");
-    return;
-  }
-
-  const imageResponse = await fetch(imageUrl);
-  const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+async function saveStatus(message) {
 
   fs.writeFileSync(
-    path.join("public", "nws-latest.jpg"),
-    imageBuffer
-  );
-
-  fs.writeFileSync(
-    path.join("public", "nws-latest.json"),
+    'public/weather/nws-status.json',
     JSON.stringify(
       {
         updated: new Date().toISOString(),
-        tweetId: match.id,
-        text: match.text,
-        image: "/nws-latest.jpg"
+        status: message
       },
       null,
       2
     )
   );
-
-  console.log("Updated image");
 }
 
-main().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+async function main() {
+
+  const browser = await chromium.launch({
+    headless: true
+  });
+
+  const page = await browser.newPage({
+    viewport: {
+      width: 1440,
+      height: 3000
+    }
+  });
+
+  try {
+
+    console.log('Loading NWSSanJuan...');
+
+    await page.goto(
+      'https://x.com/NWSSanJuan',
+      {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
+      }
+    );
+
+    await page.waitForTimeout(8000);
+
+    await page.screenshot({
+      path: 'public/weather/debug.png',
+      fullPage: true
+    });
+
+    fs.writeFileSync(
+      'public/weather/page.html',
+      await page.content()
+    );
+
+    const articleCount =
+      await page.locator('article').count();
+
+    console.log(
+      `Articles found: ${articleCount}`
+    );
+
+    const result = await page.evaluate((keywords) => {
+
+      const DAY_MS =
+        24 * 60 * 60 * 1000;
+
+      const candidates = [];
+
+      const tweets = [
+        ...document.querySelectorAll('article')
+      ];
+
+      for (const tweet of tweets) {
+
+        const timeNode =
+          tweet.querySelector('time');
+
+        if (!timeNode) continue;
+
+        const published =
+          new Date(
+            timeNode.getAttribute('datetime')
+          );
+
+        if (
+          Date.now() -
+          published.getTime() >
+          DAY_MS
+        ) {
+          continue;
+        }
+
+        const text =
+          tweet.innerText.toLowerCase();
+
+        const matched =
+          keywords.some(keyword =>
+            text.includes(
+              keyword.toLowerCase()
+            )
+          );
+
+        if (!matched) continue;
+
+        const images =
+          [...tweet.querySelectorAll('img')]
+          .filter(img =>
+            img.src.includes(
+              'pbs.twimg.com'
+            )
+          );
+
+        if (images.length === 0)
+          continue;
+
+        candidates.push({
+          timestamp:
+            published.getTime(),
+          datetime:
+            published.toISOString(),
+          imageUrl:
+            images[0].src,
+          text:
+            tweet.innerText
+        });
+      }
+
+      if (
+        candidates.length === 0
+      ) {
+        return {
+          articleCount:
+            tweets.length,
+          candidates: 0
+        };
+      }
+
+      candidates.sort(
+        (a, b) =>
+          b.timestamp - a.timestamp
+      );
+
+      return {
+        articleCount:
+          tweets.length,
+        candidates:
+          candidates.length,
+        latest:
+          candidates[0]
+      };
+
+    }, KEYWORDS);
+
+    console.log(
+      JSON.stringify(
+        result,
+        null,
+        2
+      )
+    );
+
+    if (!result.latest) {
+
+      await saveStatus(
+        `No matching advisory image found. Articles=${result.articleCount}`
+      );
+
+      await browser.close();
+
+      process.exit(0);
+    }
+
+    console.log(
+      `Downloading ${result.latest.imageUrl}`
+    );
+
+    await downloadImage(
+      result.latest.imageUrl,
+      'public/weather/nws-latest.jpg'
+    );
+
+    fs.writeFileSync(
+      'public/weather/nws-latest.json',
+      JSON.stringify(
+        {
+          updated:
+            new Date().toISOString(),
+          source:
+            'https://x.com/NWSSanJuan',
+          alertDate:
+            result.latest.datetime,
+          image:
+            '/weather/nws-latest.jpg',
+          text:
+            result.latest.text,
+          matches:
+            result.candidates
+        },
+        null,
+        2
+      )
+    );
+
+    await saveStatus(
+      'Latest advisory image updated.'
+    );
+
+    console.log(
+      'Latest advisory image saved.'
+    );
+
+    await browser.close();
+
+  } catch (error) {
+
+    console.error(error);
+
+    await saveStatus(
+      `Error: ${error.message}`
+    );
+
+    await browser.close();
+
+    process.exit(0);
+  }
+}
+
+main();
