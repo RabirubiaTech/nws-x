@@ -1,0 +1,132 @@
+name: NOAA Alert Graphic
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install axios sharp
+
+      - name: Generate Alert
+        run: |
+          mkdir -p public/weather
+
+          node <<'EOF'
+
+          const fs=require('fs');
+          const axios=require('axios');
+          const sharp=require('sharp');
+
+          (async()=>{
+
+            const r=await axios.get(
+              'https://api.weather.gov/alerts/active?area=PR',
+              {
+                headers:{
+                  'User-Agent':'rabirubiawx.com'
+                }
+              }
+            );
+
+            const alert=
+              r.data.features?.[0]?.properties ||
+              {
+                event:'No Active Alerts',
+                headline:'No active alerts.'
+              };
+
+            const svg=`
+            <svg xmlns="http://www.w3.org/2000/svg"
+                 width="1080"
+                 height="1350">
+
+            <rect width="1080"
+                  height="1350"
+                  fill="#003566"/>
+
+            <path d="M0 1000
+                     Q180 920 360 1000
+                     T720 980
+                     T1080 1050
+                     L1080 1350
+                     L0 1350 Z"
+                  fill="#00b4d8"/>
+
+            <text x="50"
+                  y="100"
+                  fill="white"
+                  font-size="40">
+                  Rabirubia Weather
+            </text>
+
+            <text x="50"
+                  y="220"
+                  fill="white"
+                  font-size="64"
+                  font-weight="bold">
+                  ${alert.event}
+            </text>
+
+            <text x="50"
+                  y="330"
+                  fill="white"
+                  font-size="32">
+                  ${(alert.headline || '').substring(0,80)}
+            </text>
+
+            <rect x="0"
+                  y="1260"
+                  width="1080"
+                  height="90"
+                  fill="#001233"/>
+
+            <text x="540"
+                  y="1315"
+                  text-anchor="middle"
+                  fill="white"
+                  font-size="36">
+                  rabirubiawx.com
+            </text>
+
+            </svg>`;
+
+            await sharp(Buffer.from(svg))
+              .png()
+              .toFile('public/weather/nws-latest.png');
+
+            fs.writeFileSync(
+              'public/weather/nws-latest.json',
+              JSON.stringify(alert,null,2)
+            );
+
+          })();
+
+          EOF
+
+      - name: Commit
+        run: |
+          git config user.name github-actions
+          git config user.email actions@github.com
+
+          git add public/weather
+
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+
+          git commit -m "Update weather graphic"
+          git push
