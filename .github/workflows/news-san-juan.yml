@@ -1,4 +1,4 @@
-name: NOAA NWS Alert Graphic
+name: Rabirubia Weather Alert Card
 
 on:
   schedule:
@@ -9,13 +9,15 @@ permissions:
   contents: write
 
 jobs:
-  update-alert:
+  generate-alert:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
@@ -23,172 +25,17 @@ jobs:
         run: |
           npm install axios sharp
 
-      - name: Create Directories
+      - name: Create Output Folder
         run: |
           mkdir -p public/weather
-          mkdir -p scripts
 
-      - name: Create Script
-        run: |
-          cat > scripts/fetch-alert.js <<'EOF'
-
-          const fs = require('fs');
-          const axios = require('axios');
-          const sharp = require('sharp');
-
-          async function main() {
-
-            const alerts =
-              await axios.get(
-                'https://api.weather.gov/alerts/active?area=PR',
-                {
-                  headers: {
-                    'User-Agent':
-                      'Rabirubia Weather Portal'
-                  }
-                }
-              );
-
-            const features =
-              alerts.data.features || [];
-
-            if (features.length === 0) {
-
-              await sharp({
-                create: {
-                  width: 1200,
-                  height: 650,
-                  channels: 4,
-                  background: '#1e3a5f'
-                }
-              })
-              .png()
-              .toFile(
-                'public/weather/nws-latest.png'
-              );
-
-              fs.writeFileSync(
-                'public/weather/nws-latest.json',
-                JSON.stringify(
-                  {
-                    updated:
-                      new Date().toISOString(),
-                    title:
-                      'No Active Alerts'
-                  },
-                  null,
-                  2
-                )
-              );
-
-              return;
-            }
-
-            const latest =
-              features[0].properties;
-
-            const title =
-              latest.event || 'NWS Alert';
-
-            const description =
-              (latest.headline || '')
-              .substring(0, 200);
-
-            const svg = `
-            <svg width="1200" height="650">
-              <style>
-                .title {
-                  fill:white;
-                  font-size:56px;
-                  font-weight:bold;
-                  font-family:Arial;
-                }
-
-                .body {
-                  fill:white;
-                  font-size:32px;
-                  font-family:Arial;
-                }
-
-                .footer {
-                  fill:#a8d7ff;
-                  font-size:22px;
-                  font-family:Arial;
-                }
-              </style>
-
-              <rect
-                width="100%"
-                height="100%"
-                fill="#002b5c"
-              />
-
-              <text
-                x="50"
-                y="120"
-                class="title">
-                ${title}
-              </text>
-
-              <text
-                x="50"
-                y="230"
-                class="body">
-                ${description}
-              </text>
-
-              <text
-                x="50"
-                y="580"
-                class="footer">
-                National Weather Service San Juan PR
-              </text>
-            </svg>
-            `;
-
-            await sharp(
-              Buffer.from(svg)
-            )
-            .png()
-            .toFile(
-              'public/weather/nws-latest.png'
-            );
-
-            fs.writeFileSync(
-              'public/weather/nws-latest.json',
-              JSON.stringify(
-                {
-                  updated:
-                    new Date().toISOString(),
-                  event:
-                    latest.event,
-                  headline:
-                    latest.headline,
-                  severity:
-                    latest.severity,
-                  certainty:
-                    latest.certainty
-                },
-                null,
-                2
-              )
-            );
-          }
-
-          main().catch(err => {
-            console.error(err);
-            process.exit(1);
-          });
-
-          EOF
-
-      - name: Run Script
-        run: node scripts/fetch-alert.js
+      - name: Run Generator
+        run: node scripts/generate-alert.js
 
       - name: Commit Changes
         run: |
-          git config user.name github-actions
-          git config user.email actions@github.com
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
 
           git add public/weather
 
@@ -197,5 +44,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Update NOAA alert graphic"
+          git commit -m "Update weather alert card"
           git push
