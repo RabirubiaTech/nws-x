@@ -1,4 +1,4 @@
-name: NOAA Alert Graphic
+name: NWS Graphicast Latest
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  alert:
+  graphicast:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,185 +20,153 @@ jobs:
           node-version: "20"
 
       - name: Install Dependencies
-        run: npm install axios sharp
-
-      - name: Generate Alert Graphic
         run: |
+          npm install axios sharp tesseract.js
+
+      - name: Fetch Latest Graphicast
+        run: |
+
           mkdir -p public/weather
 
           node <<'EOF'
-          const fs = require('fs');
-          const axios = require('axios');
-          const sharp = require('sharp');
 
-          function esc(s='') {
-            return s
-              .replace(/&/g,'&amp;')
-              .replace(/</g,'&lt;')
-              .replace(/>/g,'&gt;');
-          }
+          const fs = require("fs");
+          const axios = require("axios");
+          const sharp = require("sharp");
+          const Tesseract = require("tesseract.js");
 
-          (async () => {
+          const urls = [
+            "https://www.weather.gov/images/sju/graphicast/1.png",
+            "https://www.weather.gov/images/sju/graphicast/2.png",
+            "https://www.weather.gov/images/sju/graphicast/3.png"
+          ];
 
-            console.log('Fetching NOAA alerts...');
+          async function download(url) {
 
             const response = await axios.get(
-              'https://api.weather.gov/alerts/active?area=PR',
+              url,
               {
-                headers: {
-                  'User-Agent': 'rabirubiawx.com'
-                }
+                responseType: "arraybuffer"
               }
             );
 
-            const alert =
-              response.data.features?.[0]?.properties || {
-                event: 'No Active Alerts',
-                headline: 'No active alerts for Puerto Rico.',
-                severity: 'Information'
-              };
+            return Buffer.from(response.data);
+          }
 
-            let color = '#00B4D8';
+          async function readTimestamp(buffer,index) {
 
-            if (alert.severity === 'Extreme')
-              color = '#D90429';
+            const crop =
+              await sharp(buffer)
+              .extract({
+                left: 700,
+                top: 500,
+                width: 300,
+                height: 250
+              })
+              .png()
+              .toBuffer();
 
-            if (alert.severity === 'Severe')
-              color = '#F77F00';
-
-            const title =
-              esc(alert.event || 'NWS Alert');
-
-            const headline =
-              esc(
-                (alert.headline || '')
-                .substring(0,120)
+            const ocr =
+              await Tesseract.recognize(
+                crop,
+                "eng"
               );
 
-            const svg = `
-            <svg xmlns="http://www.w3.org/2000/svg"
-                 width="1080"
-                 height="1350">
+            return {
+              index,
+              text:
+                ocr.data.text || "",
+              buffer
+            };
+          }
 
-              <rect
-                width="1080"
-                height="1350"
-                fill="#003566"/>
+          (async()=>{
 
-              <text
-                x="540"
-                y="700"
-                text-anchor="middle"
-                fill="#ffffff"
-                opacity="0.05"
-                font-size="500"
-                font-family="Arial">
-                PR
-              </text>
+            const results=[];
 
-              <path
-                d="M0 950
-                   Q200 870 400 970
-                   T800 950
-                   T1080 1020
-                   L1080 1350
-                   L0 1350 Z"
-                fill="#0077B6"/>
+            for(
+              let i=0;
+              i<urls.length;
+              i++
+            ){
 
-              <path
-                d="M0 1080
-                   Q220 1010 440 1100
-                   T880 1080
-                   T1080 1150
-                   L1080 1350
-                   L0 1350 Z"
-                fill="#48CAE4"/>
+              console.log(
+                "Checking",
+                urls[i]
+              );
 
-              <text
-                x="50"
-                y="90"
-                fill="#90E0EF"
-                font-size="42"
-                font-weight="bold"
-                font-family="Arial">
-                Rabirubia Weather
-              </text>
+              const image=
+                await download(
+                  urls[i]
+                );
 
-              <rect
-                x="40"
-                y="120"
-                width="1000"
-                height="120"
-                rx="20"
-                fill="${color}" />
+              const info=
+                await readTimestamp(
+                  image,
+                  i
+                );
 
-              <text
-                x="70"
-                y="195"
-                fill="white"
-                font-size="58"
-                font-weight="bold"
-                font-family="Arial">
-                ${title}
-              </text>
+              results.push(info);
 
-              <text
-                x="60"
-                y="340"
-                fill="white"
-                font-size="36"
-                font-family="Arial">
-                ${headline}
-              </text>
+              console.log(
+                info.text
+              );
+            }
 
-              <text
-                x="60"
-                y="1000"
-                fill="white"
-                font-size="34"
-                font-family="Arial">
-                Severity: ${esc(alert.severity || 'Information')}
-              </text>
+            const today =
+              new Date()
+              .toLocaleDateString(
+                "en-US",
+                {
+                  timeZone:
+                   "America/Puerto_Rico"
+                }
+              );
 
-              <rect
-                x="0"
-                y="1240"
-                width="1080"
-                height="110"
-                fill="#001220"/>
+            let winner =
+              results[0];
 
-              <text
-                x="540"
-                y="1305"
-                text-anchor="middle"
-                fill="white"
-                font-size="42"
-                font-weight="bold"
-                font-family="Arial">
-                rabirubiawx.com
-              </text>
+            for(
+              const r of results
+            ){
 
-            </svg>`;
-
-            console.log('Rendering PNG...');
-
-            await sharp(Buffer.from(svg))
-              .png()
-              .toFile('public/weather/nws-latest.png');
+              if(
+                r.text.length >
+                winner.text.length
+              ){
+                winner=r;
+              }
+            }
 
             fs.writeFileSync(
-              'public/weather/nws-latest.json',
-              JSON.stringify(alert,null,2)
+              "public/weather/nws-latest.png",
+              winner.buffer
             );
 
-            console.log('PNG created');
-            console.log(
-              fs.existsSync(
-                'public/weather/nws-latest.png'
+            fs.writeFileSync(
+              "public/weather/nws-latest.json",
+              JSON.stringify(
+                {
+                  updated:
+                    new Date()
+                    .toISOString(),
+                  source:
+                    urls[winner.index],
+                  ocr:
+                    winner.text
+                },
+                null,
+                2
               )
             );
 
-          })().catch(err => {
+            console.log(
+              "Saved:",
+              urls[winner.index]
+            );
+
+          })()
+          .catch(err=>{
             console.error(err);
             process.exit(1);
           });
@@ -207,22 +175,19 @@ jobs:
 
       - name: Verify Files
         run: |
-          echo "Generated files:"
-          find public -type f
-
           ls -lah public/weather
 
       - name: Commit Changes
         run: |
+
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
           git add public/weather
 
           if git diff --cached --quiet; then
-            echo "No changes"
             exit 0
           fi
 
-          git commit -m "Update weather graphic"
+          git commit -m "Update latest NWS graphicast"
           git push
