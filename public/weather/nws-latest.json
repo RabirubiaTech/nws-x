@@ -1,21 +1,16 @@
 {
-  "updated": "2026-11-18T02:02:26.278Z",
-  "count": 3,
+  "updated": "2026-11-18T11:02:01.687Z",
+  "count": 2,
   "images": [
     {
       "file": "nws-latest-1.png",
-      "source": "https://www.weather.gov/images/sju/graphicast/1.png",
-      "modified": "2026-11-17T23:03:55.000Z"
+      "source": "https://www.weather.gov/images/sju/graphicast/2.png",
+      "modified": "2026-11-18T08:49:55.000Z"
     },
     {
       "file": "nws-latest-2.png",
-      "source": "https://www.weather.gov/images/sju/graphicast/2.png",
-      "modified": "2026-11-17T12:39:34.000Z"
-    },
-    {
-      "file": "nws-latest-3.png",
       "source": "https://www.weather.gov/images/sju/graphicast/5.png",
-      "modified": "2026-11-17T09:28:35.000Z"
+      "modified": "2026-11-18T08:26:33.000Z"
     }
   ]
 }
